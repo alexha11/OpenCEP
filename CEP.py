@@ -12,6 +12,7 @@ from typing import List
 from datetime import datetime
 from transformation.PatternPreprocessingParameters import PatternPreprocessingParameters
 from transformation.PatternPreprocessor import PatternPreprocessor
+import logging
 
 
 class CEP:
@@ -36,9 +37,19 @@ class CEP:
         Applies the evaluation mechanism to detect the predefined patterns in a given stream of events.
         Returns the total time elapsed during evaluation.
         """
+        logger = logging.getLogger(__name__)
+        logger.info("CEP engine starting pattern detection...")
+        
         start = datetime.now()
+        
+        # Wrap the evaluation with detailed logging
         self.__evaluation_manager.eval(events, matches, data_formatter)
-        return (datetime.now() - start).total_seconds()
+        
+        end_time = datetime.now()
+        total_time = (end_time - start).total_seconds()
+        logger.info(f"CEP engine completed pattern detection in {total_time:.4f}s")
+        
+        return total_time
 
     def get_pattern_match(self):
         """

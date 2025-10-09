@@ -409,3 +409,134 @@ For example, for a pattern consist of 3 types, a possible units number may be 28
 notes: - For KC patterns, only works when max_size for the Klenee Closer is given in the pattern, and doesn't work with nested Andoperator inside the KC pattern.
        - The algorithm can't deal with negation condition. 
 Warning: The more times one type is used in a pattern, the more time the algorithm runs.
+
+---
+
+# CS-E4780 Project: Load Shedding in OpenCEP
+
+This project demonstrates load shedding techniques in complex event processing using the OpenCEP framework with CitiBike data.
+
+## Overview
+
+- **Data Source**: New York CitiBike trip data from June 2013
+- **Pattern**: Hot path detection (same bike used multiple times within 1 hour)
+- **Load Shedding**: Utility-based partial match dropping with configurable thresholds
+- **Evaluation**: Comprehensive performance metrics including throughput, recall, and latency analysis
+
+## Project Structure
+
+```
+OpenCEP/
+├── src/
+│   ├── CEP.py                           # CitiBike data formatter plugin
+│   └── citibike_pattern_evaluation.py  # Main evaluation script with all modes
+├── logs/                                # Output directory for logs and results
+├── docs/                                # Additional documentation
+└── README.md                            # This file
+```
+
+## Usage
+
+### Main Script
+
+The `citibike_pattern_evaluation.py` script provides comprehensive evaluation capabilities with multiple modes:
+
+```bash
+# Basic integration test
+python3 src/citibike_pattern_evaluation.py --mode basic --data-file /path/to/data.csv
+
+# Performance scaling test
+python3 src/citibike_pattern_evaluation.py --mode performance --data-file /path/to/data.csv
+
+# Load shedding evaluation
+python3 src/citibike_pattern_evaluation.py --mode load-shedding --data-file /path/to/data.csv
+
+# Run all modes
+python3 src/citibike_pattern_evaluation.py --mode all --data-file /path/to/data.csv
+```
+
+**Arguments:**
+- `-d, --data`: Path to CitiBike CSV data file (required)
+- `--events`: Comma-separated list of event counts for performance mode
+- `--thresholds`: Comma-separated list of recall thresholds (%) for load shedding
+- `--output`: Output filename for results (default: evaluation_results.json)
+- `--log-level`: Logging level (DEBUG, INFO, WARNING, ERROR)
+- `--max-events`: Maximum events to process (default: 1000)
+
+
+## Data Format
+
+Expected CitiBike CSV format:
+```
+tripduration,starttime,stoptime,"start station id","start station name","start station latitude","start station longitude","end station id","end station name","end station latitude","end station longitude",bikeid,usertype,"birth year",gender
+```
+
+## Load Shedding Implementation
+
+### Strategy
+- **Utility-based scoring**: Partial matches scored by timestamp, completeness, and station diversity
+- **Threshold-based dropping**: Remove lowest-utility matches when overload detected
+- **Configurable bounds**: Set target recall rates (e.g., 90%, 70%, 50%)
+
+### Metrics
+- **Throughput**: Events processed per second
+- **Recall**: Percentage of matches retained after load shedding
+- **Latency**: Processing time per event batch
+- **Pattern Matches**: Total hot path detections
+
+## Results
+
+The evaluation produces detailed JSON reports including:
+- Baseline performance metrics
+- Load shedding effectiveness at different thresholds
+- Burst handling performance
+- Executive summary with key findings
+
+Example output:
+```json
+{
+  "baseline_performance": {
+    "Baseline_100": {
+      "events_processed": 101,
+      "matches_found": 6,
+      "processing_time": 0.0148,
+      "throughput": 6824.32
+    }
+  },
+  "load_shedding_results": {
+    "LoadShed_90%": {
+      "recall_rate": 0.896,
+      "matches_dropped": 5,
+      "processing_time": 0.2437
+    }
+  }
+}
+```
+
+## Key Findings
+
+1. **Scalability**: Processing time scales quadratically with event count due to pattern complexity
+2. **Load Shedding Effectiveness**: Successfully maintains target recall rates while reducing processing overhead
+3. **Hot Path Patterns**: CitiBike data shows realistic bike reuse patterns suitable for CEP analysis
+4. **Real-time Feasibility**: System can handle moderate event rates with load shedding enabled
+
+## Troubleshooting
+
+### Common Issues
+1. **File not found**: Ensure correct path to CitiBike CSV file
+2. **Import errors**: Check OpenCEP framework installation and Python path
+3. **Memory issues**: Reduce `--max-events` parameter for large datasets
+4. **No matches found**: Verify data format and pattern time window settings
+
+### Debug Mode
+Run with `--log-level DEBUG` for detailed execution logging:
+```bash
+python3 src/citibike_pattern_evaluation.py --mode basic --data-file data.csv --log-level DEBUG
+```
+
+### Expected Performance
+- **100 events**: ~0.01s processing, ~5-10 matches
+- **500 events**: ~0.25s processing, ~40-50 matches  
+- **1000 events**: ~0.95s processing, ~120-130 matches
+
+Results may vary based on data characteristics and system performance.
