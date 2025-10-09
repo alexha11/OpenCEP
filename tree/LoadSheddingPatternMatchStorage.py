@@ -25,13 +25,16 @@ class LoadSheddingConfig:
                  utility_threshold: float = 0.3,
                  shedding_strategy: str = "utility",
                  latency_bound_ms: float = 100.0,
-                 aggressive_shedding: bool = True):
+                 aggressive_shedding: bool = True,
+                 target_stations: Optional[set] = None):
         self.enabled = enabled
         self.max_partial_matches = max_partial_matches
         self.utility_threshold = utility_threshold
         self.shedding_strategy = shedding_strategy  # "utility", "random", "oldest", "fifo"
         self.latency_bound_ms = latency_bound_ms
         self.aggressive_shedding = aggressive_shedding
+        # Stations considered high-value for completion progress (aligns with pattern targets)
+        self.target_stations = set(str(s) for s in target_stations) if target_stations else None
 
 
 class LoadSheddingPatternMatchStorage:
@@ -166,7 +169,8 @@ class LoadSheddingPatternMatchStorage:
             
         # Completion progress bonus
         # Check if any events in chain end at target stations (indicates progress)
-        target_stations = {"7", "8", "9", "72", "79", "83", "262", "296", "300"}  # Common targets
+        cfg_targets = getattr(self.config, 'target_stations', None)
+        target_stations = set(str(s) for s in cfg_targets) if cfg_targets else {"7", "8", "9"}
         progress_bonus = 0.0
         
         if pm.events:
