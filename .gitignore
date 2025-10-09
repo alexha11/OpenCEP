@@ -204,3 +204,5 @@ test/*/output.txt
 *.dll
 *.dylib
 *.so.*
+
+data/**
