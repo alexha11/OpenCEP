@@ -9,7 +9,8 @@ setup(
         'pandas',
         'numpy',
         'matplotlib',
-        'seaborn'
+        'seaborn',
+        'psutil'
     ],
     author="OpenCEP Contributors",
     description="Complex Event Processing library",
