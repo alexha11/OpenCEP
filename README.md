@@ -2,6 +2,35 @@
 
 OpenCEP is a Python-based complex event processing (CEP) framework that processes streaming data to detect sophisticated patterns in real-time. This project includes both the core CEP framework and a CS-E4780 academic project demonstrating load shedding techniques with CitiBike data.
 
+## Installation
+
+### Option 1: Using setup.py (Recommended)
+
+Install OpenCEP as a package with all dependencies:
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd OpenCEP
+
+# Install the package and dependencies
+pip install -e .
+```
+
+This will automatically install all required dependencies:
+- `pandas` - Data manipulation and analysis
+- `numpy` - Numerical computing
+- `matplotlib` - Plotting and visualization
+- `seaborn` - Statistical data visualization
+
+### Option 2: Manual Installation
+
+If you prefer to install dependencies manually:
+
+```bash
+pip install pandas numpy matplotlib seaborn psutil
+```
+
 ## Quick Start
 
 ### 1. Download Data
@@ -14,15 +43,7 @@ The project uses CitiBike trip data from 2014. Run the download script to automa
 
 This will download and extract the 2014 CitiBike dataset to `data/2014-citibike-tripdata/`.
 
-### 2. Install Dependencies
-
-The project requires the following Python packages:
-
-```bash
-pip3 install psutil matplotlib seaborn pandas numpy
-```
-
-### 3. Run the System
+### 2. Run the System
 
 The easiest way to get started is using the `run.sh` script:
 
@@ -217,12 +238,17 @@ Results are logged to the `logs/` directory in JSON format, including:
 
 ### Dependencies
 
-Required Python packages:
-- `psutil` - System monitoring
-- `matplotlib` - Visualization
-- `seaborn` - Statistical plots
-- `pandas` - Data manipulation
-- `numpy` - Numerical operations
+The project dependencies are defined in `setup.py` and include:
+- `pandas` - Data manipulation and analysis
+- `numpy` - Numerical computing
+- `matplotlib` - Plotting and visualization
+- `seaborn` - Statistical data visualization
+- `psutil` - System monitoring and performance analysis
+
+Install all dependencies automatically with:
+```bash
+pip install -e .
+```
 
 All other dependencies are part of the Python standard library.
 

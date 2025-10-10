@@ -242,3 +242,33 @@ class Tree:
         Returns the root node of the tree.
         """
         return self.__root
+    
+    def get_all_nodes(self):
+        """
+        Returns all nodes in the tree by traversing from the root.
+        """
+        nodes = []
+        self.__collect_nodes_recursive(self.__root, nodes)
+        return nodes
+    
+    def __collect_nodes_recursive(self, node, nodes):
+        """
+        Recursively collect all nodes in the tree.
+        """
+        if node is None:
+            return
+        
+        nodes.append(node)
+        
+        # Handle different node types
+        if hasattr(node, '_child') and node._child is not None:
+            # Unary node (like KleeneClosureNode)
+            self.__collect_nodes_recursive(node._child, nodes)
+        
+        if hasattr(node, '_left_child') and node._left_child is not None:
+            # Binary node left child
+            self.__collect_nodes_recursive(node._left_child, nodes)
+        
+        if hasattr(node, '_right_child') and node._right_child is not None:
+            # Binary node right child
+            self.__collect_nodes_recursive(node._right_child, nodes)

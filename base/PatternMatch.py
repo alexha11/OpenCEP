@@ -41,3 +41,44 @@ class PatternMatch:
         """
         if pattern_id not in self.pattern_ids:
             self.pattern_ids.append(pattern_id)
+    
+    def calculate_utility(self, current_time, target_stations=[7, 8, 9], window_seconds=3600):
+        """
+        Calculate utility score for load shedding.
+        Higher utility = more valuable = keep it
+        Lower utility = less valuable = drop it
+        
+        Factors:
+        - Chain length: Longer chains are closer to completion
+        - Time remaining: More time left = higher chance of completion
+        - Target station proximity: Is the last station near target stations?
+        """
+        # Factor 1: Chain length (longer = better)
+        chain_length = len(self.events)
+        
+        # Factor 2: Time remaining in window (more time = better)
+        elapsed = (current_time - self.first_timestamp).total_seconds()
+        time_remaining = window_seconds - elapsed
+        
+        # Factor 3: Last station proximity to target
+        # Try to get end station from last event
+        try:
+            last_event = self.events[-1]
+            last_station = last_event.payload.get('end station id', None)
+            
+            if last_station is not None:
+                # Calculate distance to nearest target station
+                distance_to_target = min([abs(last_station - t) for t in target_stations])
+            else:
+                distance_to_target = 100  # High penalty if station unknown
+        except (IndexError, KeyError, TypeError):
+            distance_to_target = 100  # High penalty if can't determine station
+        
+        # Combine factors with weights (you can tune these)
+        utility = (
+            chain_length * 10.0 +           # Longer chains = +10 per event
+            time_remaining / 60.0 -         # More time = better (in minutes)
+            distance_to_target * 0.5        # Closer to target = better
+        )
+        
+        return utility
