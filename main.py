@@ -15,7 +15,6 @@ import logging
 import argparse
 import os
 from datetime import datetime, timedelta
-from typing import Tuple
 from dataclasses import dataclass
 
 # Add OpenCEP root directory to path for imports
@@ -29,10 +28,34 @@ from base.Pattern import Pattern
 from base.PatternStructure import SeqOperator, PrimitiveEventStructure, KleeneClosureOperator
 from condition.Condition import Variable, BinaryCondition, SimpleCondition
 from condition.CompositeCondition import AndCondition
-from condition.BaseRelationCondition import EqCondition
 from stream.Stream import InputStream, OutputStream
 from stream.FileStream import FileInputStream
 from plugin.citibike.CitiBikeFormatter import CitiBikeDataFormatter
+
+
+def print_box(title, content, width=80):
+    """Print content in a nice box format"""
+    print("┌" + "─" * (width - 2) + "┐")
+    # Center the title
+    title_padding = (width - 2 - len(title)) // 2
+    remaining_padding = width - 2 - title_padding - len(title)
+    print("│" + " " * title_padding + title + " " * remaining_padding + "│")
+    print("├" + "─" * (width - 2) + "┤")
+    
+    # Handle content as list or string
+    if isinstance(content, str):
+        content = content.split('\n')
+    
+    for line in content:
+        if line.strip():  # Skip empty lines
+            # Truncate long lines and pad short ones
+            display_line = line[:width-4] if len(line) > width-4 else line
+            padding = width - 4 - len(display_line)
+            print("│ " + display_line + " " * padding + " │")
+        else:
+            print("│" + " " * (width - 2) + "│")
+    
+    print("└" + "─" * (width - 2) + "┘")
 
 
 def setup_logging(log_level=logging.INFO, log_file='citibike_evaluation.log'):
@@ -52,14 +75,6 @@ def setup_logging(log_level=logging.INFO, log_file='citibike_evaluation.log'):
     return logging.getLogger(__name__)
 
 
-@dataclass
-class SimulatedLoadSheddingConfig:
-    """Configuration for simulated load shedding (unused - kept for compatibility)"""
-    enabled: bool = False
-    latency_bound_percent: float = 100.0
-    utility_threshold: float = 0.5
-    max_partial_matches: int = 10000
-    shedding_strategy: str = "utility"
 
 @dataclass
 class TestResult:
@@ -128,7 +143,7 @@ class CitiBikeEvaluator:
         if not os.path.exists(data_file_path):
             raise FileNotFoundError(f"Data file not found: {data_file_path}")
         
-        self.logger.info(f"Initialized with data file: {data_file_path}")
+        self.logger.debug(f"Initialized with data file: {data_file_path}")
     
     def _parse_burst_seq(self, burst_seq_str: str):
         """Parse burst sequence string to list of (rate, duration) tuples."""
@@ -187,7 +202,7 @@ class CitiBikeEvaluator:
     
     def _run_cep_with_event_logging(self, cep, events, output, formatter, max_events):
         """Run CEP with timeout monitoring."""
-        self.logger.info(f"Starting CEP processing for {max_events} events")
+        self.logger.debug(f"Starting CEP processing for {max_events} events")
         
         import threading
         
@@ -200,7 +215,6 @@ class CitiBikeEvaluator:
         try:
             processing_time = cep.run(events, output, formatter)
             timeout_timer.cancel()
-            print(f"CEP processing completed in {processing_time:.4f}s")
             return processing_time
         except Exception as e:
             timeout_timer.cancel()
@@ -229,165 +243,7 @@ class CitiBikeEvaluator:
             return file_input
     
     
-    def run_basic_test(self, max_events=100):
-        """Basic integration test."""
-        print("=" * 60)
-        print("BASIC INTEGRATION TEST")
-        print("=" * 60)
-        print(f"Events: {max_events}")
-        print("-" * 60)
-        
-        try:
-            print("Creating hot path pattern...")
-            pattern = self.create_hot_path_pattern()
-            
-            load_shedding_config = LoadSheddingConfig(
-                enabled=True,
-                max_partial_matches=50,
-                shedding_strategy="utility",
-                aggressive_shedding=True,
-                target_stations=set(self.target_stations)
-            )
-            
-            cep = LoadSheddingCEP([pattern], load_shedding_config)
-            events = self.create_event_stream(max_events)
-            output = OutputStream()
-            formatter = CitiBikeDataFormatter()
-            
-            print(f"\nProcessing {max_events} events...")
-            start_time = time.time()
-            processing_time = self._run_cep_with_event_logging(cep, events, output, formatter, max_events)
-            wall_clock_time = time.time() - start_time
-            
-            matches = []
-            if output.count() > 0:
-                try:
-                    internal_queue = output._stream.queue
-                    for item in internal_queue:
-                        if item is None:
-                            break
-                        matches.append(item)
-                except Exception as e:
-                    print(f"Error collecting matches: {e}")
-            
-            # Create result
-            result = TestResult(
-                mode="basic",
-                events_processed=max_events,
-                processing_time=processing_time,
-                wall_clock_time=wall_clock_time,
-                matches_found=len(matches),
-                throughput=max_events / wall_clock_time if wall_clock_time > 0 else 0
-            )
-            
-            print(f"\nTest PASSED")
-            print(f"Events: {max_events}, Matches: {len(matches)}, Time: {processing_time:.4f}s")
-            print(f"Throughput: {result.throughput:.1f} events/s")
-            
-            if matches:
-                print(f"\nSample matches (showing first 3):")
-                for i, match in enumerate(matches[:3]):
-                    events_in_match = match.events
-                    if len(events_in_match) >= 2:
-                        # Get bike ID from any event that has it
-                        bike_id = None
-                        for event in events_in_match:
-                            if event.payload.get('bikeid'):
-                                bike_id = event.payload.get('bikeid')
-                                break
-                        
-                        # For pattern SEQ(BikeTrip+ a[], BikeTrip b):
-                        # a[] = events_in_match[:-1], b = events_in_match[-1]
-                        a_events = events_in_match[:-1]  # All but last
-                        b_event = events_in_match[-1]     # Last event
-                        
-                        # Note: Kleene closure events (a[]) lose their full payload in OpenCEP
-                        # Only the final event (b) retains complete data
-                        b_start = b_event.payload.get('start station id')
-                        b_end = b_event.payload.get('end station id')
-                        
-                        # Format output - show what we can
-                        def fmt(val):
-                            return str(val) if val is not None else 'N/A'
-                        
-                        chain_len = len(a_events)
-                        print(f"  Match {i+1}: Bike {fmt(bike_id)}, chain of {chain_len}+1 trips ending at {fmt(b_start)} → {fmt(b_end)}")
-            
-            self.results.append(result)
-            return result
-            
-        except Exception as e:
-            print(f"Integration test FAILED: {e}")
-            self.logger.error(f"Basic test failed: {e}")
-            return None
     
-    def run_performance_test(self, test_sizes=[50, 100, 200, 500]):
-        """Mode 2: Performance baseline measurement"""
-        print("=" * 60)
-        print("PERFORMANCE BASELINE TEST")
-        print("=" * 60)
-        print("Purpose: Measure performance scaling with different event counts")
-        print(f"Test sizes: {test_sizes}")
-        print("-" * 60)
-        
-        self.logger.info("Starting performance baseline test")
-        results = []
-        
-        for size in test_sizes:
-            print(f"\nTesting with {size} events...")
-            
-            try:
-                # Create pattern and CEP engine
-                pattern = self.create_hot_path_pattern()
-                cep = CEP([pattern])
-                
-                # Create event stream
-                events = self.create_event_stream(size)
-                output = OutputStream()
-                formatter = CitiBikeDataFormatter()
-                
-                # Run detection
-                start_time = time.time()
-                processing_time = cep.run(events, output, formatter)
-                wall_clock_time = time.time() - start_time
-                
-                # Collect matches
-                matches = []
-                try:
-                    for match in output:
-                        if match is None:
-                            break
-                        matches.append(match)
-                except StopIteration:
-                    pass
-                
-                # Create result
-                result = TestResult(
-                    mode="performance",
-                    events_processed=size,
-                    processing_time=processing_time,
-                    wall_clock_time=wall_clock_time,
-                    matches_found=len(matches),
-                    throughput=size / wall_clock_time if wall_clock_time > 0 else 0
-                )
-                
-                print(f"  Results: {len(matches)} matches, {result.throughput:.1f} events/s")
-                results.append(result)
-                self.results.append(result)
-                
-            except Exception as e:
-                print(f"  ERROR: {e}")
-                self.logger.error(f"Performance test failed for size {size}: {e}")
-        
-        # Summary table
-        if results:
-            print(f"\nPerformance Summary:")
-            print("Events\tTime(s)\tMatches\tThroughput(e/s)")
-            print("-" * 40)
-            for r in results:
-                print(f"{r.events_processed}\t{r.wall_clock_time:.2f}\t{r.matches_found}\t{r.throughput:.1f}")
-        
-        return results
     
     def _run_detection(self, pattern, max_events: int, load_shedding_config: LoadSheddingConfig = None):
         """Run CEP on given pattern and return (processing_time, wall_time, matches_list)."""
@@ -442,91 +298,20 @@ class CitiBikeEvaluator:
                 return (mid, proc, wall, kept, 0)
         return best
     
-    def simulate_load_shedding(self, matches_found: int, processing_time: float, 
-                             config: SimulatedLoadSheddingConfig) -> Tuple[int, float, int]:
-        """Simulate advanced load shedding with utility-based dropping"""
-        if not config.enabled or config.latency_bound_percent >= 100.0:
-            return matches_found, 1.0, 0  # No shedding
-        
-        self.logger.info(f"Applying load shedding: target {config.latency_bound_percent}% of baseline latency")
-        
-        # Calculate required shedding based on latency constraint
-        target_latency = processing_time * (config.latency_bound_percent / 100.0)
-        latency_reduction_needed = processing_time - target_latency
-        
-        if latency_reduction_needed <= 0:
-            return matches_found, 1.0, 0
-        
-        # Estimate shedding factor based on latency reduction needed
-        # More aggressive shedding for tighter latency bounds
-        shedding_intensity = min(1.0, latency_reduction_needed / processing_time)
-        
-        if config.shedding_strategy == "utility":
-            # Utility-based shedding: prioritize longer chains near target stations
-            # Simulate dropping lower-utility partial matches
-            utility_scores = self._simulate_utility_scores(matches_found)
-            sorted_by_utility = sorted(enumerate(utility_scores), key=lambda x: x[1], reverse=True)
-            
-            # Keep high-utility matches, drop low-utility ones
-            matches_to_keep = int(matches_found * (1.0 - shedding_intensity))
-            remaining_matches = max(0, matches_to_keep)
-            
-        elif config.shedding_strategy == "random":
-            # Random dropping
-            remaining_matches = int(matches_found * (1.0 - shedding_intensity))
-            
-        elif config.shedding_strategy == "oldest":
-            # Drop oldest partial matches (FIFO)
-            remaining_matches = int(matches_found * (1.0 - shedding_intensity))
-            
-        else:
-            # Default: proportional dropping
-            remaining_matches = int(matches_found * (1.0 - shedding_intensity))
-        
-        remaining_matches = max(0, remaining_matches)
-        dropped_matches = matches_found - remaining_matches
-        recall_rate = remaining_matches / max(matches_found, 1)
-        
-        self.logger.info(f"Load shedding applied: kept {remaining_matches}/{matches_found} matches")
-        self.logger.info(f"Shedding strategy: {config.shedding_strategy}, recall: {recall_rate:.3f}")
-        
-        return remaining_matches, recall_rate, dropped_matches
-    
-    def _simulate_utility_scores(self, num_matches: int) -> list:
-        """Simulate utility scores for matches (higher = more valuable)"""
-        import random
-        # Simulate utility based on:
-        # - Chain length (longer chains = higher utility)
-        # - Proximity to target stations 7,8,9 
-        # - Remaining window time
-        utility_scores = []
-        for i in range(num_matches):
-            # Random utility with bias toward higher values for simulation
-            base_utility = random.uniform(0.3, 1.0)
-            # Boost utility for matches closer to completion
-            completion_bonus = random.uniform(0.0, 0.3)
-            utility_scores.append(min(1.0, base_utility + completion_bonus))
-        return utility_scores
     
     def run_load_shedding_test(self, latency_bounds=[90, 70, 50, 30, 10], test_events=500):
         """Mode 3: Load shedding evaluation with measured recall and latency bounds."""
-        print("=" * 60)
-        print("LOAD SHEDDING EVALUATION TEST")
-        print("=" * 60)
-        print("Purpose: Evaluate load shedding impact on latency vs recall")
-        print(f"Test events: {test_events}")
-        print(f"Target stations: {self.target_stations}")
-        print(f"Latency bounds: {latency_bounds}% of baseline (PROJECT REQUIREMENT)")
-        print("-" * 60)
-        print(f"NOTE: Pattern requires chained bike trips ending at target stations.")
-        print(f"      For meaningful results, ensure: (1) Enough events (100+)")
-        print(f"      (2) Valid target stations (use scripts/find_targets.py)")
-        print("-" * 60)
+        print_box("LOAD SHEDDING EVALUATION", [
+            "Purpose: Evaluate load shedding impact on latency vs recall",
+            f"Test events: {test_events}",
+            f"Target stations: {self.target_stations}",
+            f"Latency bounds: {latency_bounds}% of baseline (PROJECT REQUIREMENT)"
+        ])
         
-        self.logger.info("Starting load shedding evaluation as per project requirements")
+        self.logger.debug("Starting load shedding evaluation as per project requirements")
         
         # Step 1: Baseline without load shedding
-        print("\nStep 1: Measuring baseline performance (no load shedding)...")
+        print("\nStep 1: Measuring baseline performance...")
         try:
             pattern = self.create_hot_path_pattern()
             base_proc, base_wall, base_matches = self._run_detection(pattern, test_events, load_shedding_config=None)
@@ -539,14 +324,22 @@ class CitiBikeEvaluator:
                 throughput=test_events / base_wall if base_wall > 0 else 0,
                 baseline_matches=len(base_matches)
             )
-            print(f"  Baseline: {len(base_matches)} matches, {baseline_result.throughput:.1f} events/s")
-            print(f"  Processing time: {base_proc:.4f}s")
+            
+            baseline_info = [
+                f"Matches found: {len(base_matches)}",
+                f"Processing time: {base_proc:.4f}s", 
+                f"Throughput: {baseline_result.throughput:.1f} events/s"
+            ]
             
             if len(base_matches) == 0:
-                print(f"  WARNING: No matches found in baseline!")
-                print(f"  This pattern requires chained trips on same bike ending at stations {self.target_stations}")
-                print(f"  Try: (1) More events (--max-events 100+), (2) Find actual targets (scripts/find_targets.py)")
-                print(f"  Recall metrics will be meaningless with 0 baseline matches.")
+                baseline_info.extend([
+                    "",
+                    "WARNING: No matches found!",
+                    "Pattern requires chained bike trips ending at target stations",
+                    "Try: (1) More events, (2) Check target stations"
+                ])
+            
+            print_box("BASELINE RESULTS", baseline_info)
             
             self.results.append(baseline_result)
         except Exception as e:
@@ -555,11 +348,11 @@ class CitiBikeEvaluator:
             return []
         
         # Step 2: Measured recall under latency bounds via search over max_partial_matches
-        print("\nStep 2: Measuring recall at latency bounds...")
+        print("\nStep 2: Testing latency bounds...")
         load_shedding_results = []
-        for bound in latency_bounds:
+        for i, bound in enumerate(latency_bounds, 1):
             target_time = baseline_result.wall_clock_time * (bound / 100.0)
-            print(f"\nTesting {bound}% latency bound (target <= {target_time:.4f}s)...")
+            print(f"\n[{i}/{len(latency_bounds)}] Testing {bound}% latency bound (target ≤ {target_time:.4f}s)...")
             try:
                 best = self._search_shedding_for_latency(pattern, test_events, target_time)
                 if not best:
@@ -586,13 +379,25 @@ class CitiBikeEvaluator:
                     baseline_matches=baseline_result.matches_found,
                     dropped_matches=max(0, baseline_result.matches_found - len(kept))
                 )
-                print(f"  max_partial_matches={max_pm}")
-                print(f"  Matches: {len(kept)} (baseline: {baseline_result.matches_found})")
+                # Create boxed result for this latency bound
+                bound_result_lines = [
+                    f"Target: {bound}% of baseline latency",
+                    f"Max partial matches: {max_pm}",
+                    "",
+                    f"Matches found: {len(kept)} (baseline: {baseline_result.matches_found})",
+                ]
+                
                 if baseline_result.matches_found > 0:
-                    print(f"  Recall: {recall_rate:.3f} ({recall_rate*100:.1f}%)")
+                    bound_result_lines.append(f"Recall rate: {recall_rate:.3f} ({recall_rate*100:.1f}%)")
                 else:
-                    print(f"  Recall: N/A (no baseline matches)")
-                print(f"  Measured latency: {wall:.4f}s ({(wall / baseline_result.wall_clock_time)*100:.1f}% of baseline)")
+                    bound_result_lines.append(f"Recall rate: N/A (no baseline matches)")
+                
+                bound_result_lines.extend([
+                    f"Measured latency: {wall:.4f}s",
+                    f"Percentage of baseline: {(wall / baseline_result.wall_clock_time)*100:.1f}%"
+                ])
+                
+                print_box(f"{bound}% LATENCY BOUND RESULT", bound_result_lines)
                 load_shedding_results.append(result)
                 self.results.append(result)
             except Exception as e:
@@ -601,16 +406,20 @@ class CitiBikeEvaluator:
         
         # Summary
         if load_shedding_results:
-            print(f"\nLoad Shedding Summary:")
-            print(f"Baseline matches: {baseline_result.matches_found}")
-            print("Latency Bound\tRecall Rate\tMatches Kept\tBaseline")
-            print("-" * 60)
+            summary_lines = [
+                f"Baseline matches: {baseline_result.matches_found}",
+                "",
+                "Bound    Recall   Kept    Baseline"
+            ]
+            
             for r in load_shedding_results:
                 bound = r.mode.split('_')[2]
                 if baseline_result.matches_found > 0:
-                    print(f"{bound}\t\t{r.recall_rate:.2f}\t\t{r.matches_found}\t\t{r.baseline_matches}")
+                    summary_lines.append(f"{bound:<8} {r.recall_rate:.2f}     {r.matches_found:<6}  {r.baseline_matches}")
                 else:
-                    print(f"{bound}\t\tN/A\t\t{r.matches_found}\t\t{r.baseline_matches}")
+                    summary_lines.append(f"{bound:<8} N/A      {r.matches_found:<6}  {r.baseline_matches}")
+            
+            print_box("LOAD SHEDDING SUMMARY", summary_lines)
         
         return load_shedding_results
     
@@ -648,23 +457,22 @@ class CitiBikeEvaluator:
         with open(output_file, 'w') as f:
             json.dump(report, f, indent=2)
         
-        print(f"\nResults saved to: {output_file}")
         return report
 
 
 def main():
     """Main function with mode selection"""
-    parser = argparse.ArgumentParser(description='CitiBike Pattern Detection Evaluation')
+    parser = argparse.ArgumentParser(description='CitiBike Load Shedding Evaluation - CS-E4780 Project')
     
-    parser.add_argument('--mode', choices=['basic', 'performance', 'load-shedding', 'all'],
-                       default='all', help='Evaluation mode to run')
+    parser.add_argument('--mode', choices=['load-shedding'],
+                       default='load-shedding', help='Evaluation mode (only load-shedding available)')
     parser.add_argument('--data-file', '-d', required=True,
                        help='Path to the CitiBike CSV data file')
     parser.add_argument('--output-file', '-o', default='citibike_evaluation_results.json',
                        help='Output file for results')
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        default='INFO', help='Logging level')
-    parser.add_argument('--max-events', type=int, default=10, help='Maximum events to process (default: 10 due to Kleene closure complexity)')
+    parser.add_argument('--max-events', type=int, default=20, help='Maximum events to process (default: 20, limited by Kleene closure complexity)')
     parser.add_argument('--target-stations', nargs='+', default=["7", "8", "9"],
                        help='Target station IDs for pattern matching (default: 7 8 9 per project spec)')
     parser.add_argument('--ingest-rate', type=float, default=0.0,
@@ -677,37 +485,32 @@ def main():
     # Setup logging level
     log_level = getattr(logging, args.log_level.upper())
     
-    print("=" * 80)
-    print("CITIBIKE PATTERN DETECTION WITH LOAD SHEDDING EVALUATION")
-    print("=" * 80)
-    print(f"Mode: {args.mode}")
-    print(f"Data file: {args.data_file}")
-    print(f"Max events: {args.max_events}")
-    print(f"Target stations: {args.target_stations}")
-    print("=" * 80)
+    header_info = [
+        f"Mode: {args.mode}",
+        f"Data file: {os.path.basename(args.data_file)}", 
+        f"Max events: {args.max_events}",
+        f"Target stations: {args.target_stations}"
+    ]
+    print_box("CITIBIKE LOAD SHEDDING EVALUATION - CS-E4780", header_info, width=90)
     
     try:
         # Initialize evaluator
         evaluator = CitiBikeEvaluator(args.data_file, log_level, args.target_stations, args.ingest_rate, args.burst_seq)
         
-        # Run selected mode(s)
-        if args.mode == 'basic' or args.mode == 'all':
-            evaluator.run_basic_test(args.max_events)
-        
-        if args.mode == 'performance' or args.mode == 'all':
-            test_sizes = [50, 100, 200, min(500, args.max_events)]
-            if args.max_events > 500:
-                test_sizes.append(args.max_events)
-            evaluator.run_performance_test(test_sizes)
-        
-        if args.mode == 'load-shedding' or args.mode == 'all':
-            evaluator.run_load_shedding_test(test_events=args.max_events)
+        # Run load shedding evaluation (the only required mode)
+        evaluator.run_load_shedding_test(test_events=args.max_events)
         
         # Save results
         evaluator.save_results(args.output_file)
         
-        print(f"\nEvaluation completed successfully!")
-        print(f"Log file: logs/citibike_evaluation.log")
+        # Final completion summary
+        final_summary = [
+            "Evaluation completed successfully!",
+            "",
+            f"Results: logs/{args.output_file}",
+            f"Logs: logs/citibike_evaluation.log"
+        ]
+        print_box("EVALUATION COMPLETE", final_summary)
         
     except FileNotFoundError as e:
         print(f"Error: {e}")

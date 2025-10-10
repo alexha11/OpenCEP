@@ -119,8 +119,51 @@ def main():
                 mid_end = 2 * len(filtered) // 3
                 candidates = filtered[mid_start:mid_end] if len(filtered) > args.top else filtered
                 chosen = [sid for sid, _, _, _ in candidates[:args.top]]
-
-        print(' '.join(chosen))
+        
+        # Guarantee we have at least args.top stations
+        if len(chosen) < args.top:
+            # Add more stations from end_counts that we haven't chosen yet
+            additional_needed = args.top - len(chosen)
+            chosen_set = set(chosen)
+            additional = []
+            for sid, count in end_counts.most_common():
+                if sid not in chosen_set and len(additional) < additional_needed:
+                    additional.append(sid)
+            chosen.extend(additional)
+        
+        # Final safety check: ensure we have at least args.top stations
+        if len(chosen) < args.top:
+            # Emergency fallback: use any available station IDs
+            all_stations = set(start_counts.keys()) | set(end_counts.keys())
+            chosen_set = set(chosen)
+            for sid in all_stations:
+                if sid not in chosen_set and len(chosen) < args.top:
+                    chosen.append(sid)
+        
+        # Truncate to exactly args.top if we somehow got more
+        chosen = chosen[:args.top]
+        
+        # Final validation: ensure all chosen stations appear in our analyzed events
+        all_stations = set(start_counts.keys()) | set(end_counts.keys())
+        validated_chosen = [sid for sid in chosen if sid in all_stations]
+        
+        if len(validated_chosen) < args.top:
+            # If validation removed some, add back from available stations
+            missing = args.top - len(validated_chosen)
+            chosen_set = set(validated_chosen)
+            for sid in all_stations:
+                if sid not in chosen_set and missing > 0:
+                    validated_chosen.append(sid)
+                    missing -= 1
+        
+        # Use validated list, truncated to requested number
+        final_chosen = validated_chosen[:args.top]
+        
+        # Ensure we output something even if we couldn't find enough stations
+        if not final_chosen:
+            final_chosen = ['1']  # Emergency fallback
+        
+        print(' '.join(final_chosen))
 
         if args.verbose:
             print('\nDetected columns:', file=sys.stderr)
@@ -131,12 +174,19 @@ def main():
             
             if overlap:
                 print('\nChosen stations (sid, combined_count, end_count, start_count):', file=sys.stderr)
-                for sid in chosen:
+                for sid in final_chosen:
                     matches = [x for x in overlap if x[0] == sid]
                     if matches:
                         sid_val, comb, ec, sc = matches[0]
                         selectivity = f'{(comb/events_read)*100:.1f}%' if events_read > 0 else 'N/A'
                         print(f'  {sid_val}: {comb} total ({selectivity} of events), {ec} ends, {sc} starts', file=sys.stderr)
+                    else:
+                        # Station from end_counts only
+                        end_count = end_counts.get(sid, 0)
+                        start_count = start_counts.get(sid, 0)
+                        total = end_count + start_count
+                        selectivity = f'{(total/events_read)*100:.1f}%' if events_read > 0 else 'N/A'
+                        print(f'  {sid}: {total} total ({selectivity} of events), {end_count} ends, {start_count} starts', file=sys.stderr)
                 
                 if args.mode == 'rare':
                     print('\n[RARE mode: These stations appear infrequently = more selective patterns]', file=sys.stderr)

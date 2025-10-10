@@ -68,7 +68,7 @@ class LoadSheddingCEP(CEP):
                 self._wrap_node_storage(node)
                 wrapped_count += 1
                 
-        print(f"Load shedding: wrapped {wrapped_count} nodes")
+        self.load_shedding_stats['total_storages_wrapped'] = wrapped_count
         
     def _traverse_tree_nodes(self, root_node):
         """Traverse tree to find all nodes."""
@@ -111,7 +111,11 @@ class LoadSheddingCEP(CEP):
         
     def run(self, events, matches, data_formatter):
         start_time = time.time()
-        print(f"Max partial matches: {self.load_shedding_config.max_partial_matches}, Strategy: {self.load_shedding_config.shedding_strategy}")
+        
+        self.load_shedding_stats['config'] = {
+            'max_partial_matches': self.load_shedding_config.max_partial_matches,
+            'strategy': self.load_shedding_config.shedding_strategy
+        }
         
         processing_time = super().run(events, matches, data_formatter)
         self._collect_load_shedding_stats()
@@ -163,20 +167,50 @@ class LoadSheddingCEP(CEP):
     def _report_load_shedding_results(self, processing_time: float, wall_time: float):
         """Report load shedding results."""
         stats = self.load_shedding_stats
-        print("\n" + "=" * 50)
-        print("LOAD SHEDDING RESULTS")
-        print("=" * 50)
         
         if not self.load_shedding_config.enabled:
-            print("Status: DISABLED")
+            self._print_box("LOAD SHEDDING RESULTS", ["Status: DISABLED"])
             return
             
-        print(f"Wrapped nodes: {stats['total_storages_wrapped']}")
-        print(f"Dropped matches: {stats['total_dropped_matches']}")
-        print(f"Shedding events: {stats['shedding_events']}")
-        print(f"Final storage: {stats.get('final_storage_size', 0)}")
-        print(f"Processing time: {processing_time:.4f}s, Wall time: {wall_time:.4f}s")
-        print("=" * 50)
+        config = stats.get('config', {})
+        result_lines = [
+            f"Max partial matches: {config.get('max_partial_matches', 'N/A')}",
+            f"Strategy: {config.get('strategy', 'N/A')}",
+            "",
+            f"Wrapped nodes: {stats['total_storages_wrapped']}",
+            f"Dropped matches: {stats['total_dropped_matches']}", 
+            f"Shedding events: {stats['shedding_events']}",
+            f"Final storage: {stats.get('final_storage_size', 0)}",
+            "",
+            f"Processing time: {processing_time:.4f}s",
+            f"Wall time: {wall_time:.4f}s"
+        ]
+        
+        self._print_box("LOAD SHEDDING RESULTS", result_lines)
+    
+    def _print_box(self, title, content, width=60):
+        """Print content in a nice box format"""
+        print("\n┌" + "─" * (width - 2) + "┐")
+        # Center the title
+        title_padding = (width - 2 - len(title)) // 2
+        remaining_padding = width - 2 - title_padding - len(title)
+        print("│" + " " * title_padding + title + " " * remaining_padding + "│")
+        print("├" + "─" * (width - 2) + "┤")
+        
+        # Handle content as list or string
+        if isinstance(content, str):
+            content = content.split('\n')
+        
+        for line in content:
+            if line.strip():  # Skip empty lines
+                # Truncate long lines and pad short ones
+                display_line = line[:width-4] if len(line) > width-4 else line
+                padding = width - 4 - len(display_line)
+                print("│ " + display_line + " " * padding + " │")
+            else:
+                print("│" + " " * (width - 2) + "│")
+        
+        print("└" + "─" * (width - 2) + "┘")
         
     def get_load_shedding_summary(self):
         """Get load shedding summary."""
