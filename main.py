@@ -3,14 +3,8 @@
 CitiBike Pattern Detection with Load Shedding Evaluation
 CS-E4780 Project: Efficient Pattern Detection over Data Streams
 
-This is the main script that combines all functionality:
-- Basic integration testing
-- Performance baseline measurement  
-- Load shedding simulation and evaluation
-
 Usage:
   python3 main.py --mode basic -d data.csv
-  python3 main.py --mode performance -d data.csv
   python3 main.py --mode load-shedding -d data.csv
 """
 
@@ -43,36 +37,29 @@ from plugin.citibike.CitiBikeFormatter import CitiBikeDataFormatter
 
 def setup_logging(log_level=logging.INFO, log_file='citibike_evaluation.log'):
     """Setup logging configuration"""
-    # Create logs directory if it doesn't exist
     logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
     os.makedirs(logs_dir, exist_ok=True)
     
-    # Ensure log file is in logs directory
     if not os.path.dirname(log_file):
         log_file = os.path.join(logs_dir, log_file)
     
-    # Clear any existing handlers to avoid duplicates
     logging.root.handlers.clear()
-    
     logging.basicConfig(
         level=log_level,
         format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler(sys.stdout)  # Explicitly use stdout
-        ]
+        handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stdout)]
     )
     return logging.getLogger(__name__)
 
 
 @dataclass
 class SimulatedLoadSheddingConfig:
-    """Configuration for simulated load shedding strategies (for testing)"""
+    """Configuration for simulated load shedding (unused - kept for compatibility)"""
     enabled: bool = False
-    latency_bound_percent: float = 100.0  # % of baseline latency
-    utility_threshold: float = 0.5  # Drop partial matches below this utility
-    max_partial_matches: int = 10000  # Max partial matches to keep
-    shedding_strategy: str = "utility"  # "utility", "random", "oldest"
+    latency_bound_percent: float = 100.0
+    utility_threshold: float = 0.5
+    max_partial_matches: int = 10000
+    shedding_strategy: str = "utility"
 
 @dataclass
 class TestResult:
@@ -90,19 +77,19 @@ class TestResult:
 
 
 class ThrottledFileInputStream(InputStream):
-    """Input stream that throttles ingestion to simulate fixed or bursty rates."""
+    """Input stream that throttles ingestion to simulate burst patterns."""
     def __init__(self, file_path: str, ingest_rate: float = 0.0, burst_seq: list = None):
         super().__init__()
-        # No throttle
+        
         if (not burst_seq) and (not ingest_rate or ingest_rate <= 0):
             with open(file_path, "r") as f:
                 for line in f:
                     self._stream.put(line)
             self.close()
             return
-        # Fixed rate
+            
         if (not burst_seq) and ingest_rate and ingest_rate > 0:
-            interval = 1.0 / ingest_rate if ingest_rate > 0 else 0.0
+            interval = 1.0 / ingest_rate
             with open(file_path, "r") as f:
                 for line in f:
                     self._stream.put(line)
@@ -110,7 +97,7 @@ class ThrottledFileInputStream(InputStream):
                         time.sleep(interval)
             self.close()
             return
-        # Burst sequence: list of (rate, duration_sec)
+            
         with open(file_path, "r") as f:
             seg_idx = 0
             rate, dur = burst_seq[0]
@@ -134,55 +121,35 @@ class CitiBikeEvaluator:
         self.data_file_path = data_file_path
         self.logger = setup_logging(log_level)
         self.results = []
-        # Default to project-specified stations {7,8,9}
         self.target_stations = target_stations or ["7", "8", "9"]
-        # Ingestion control
         self.ingest_rate = float(ingest_rate or 0.0)
         self.burst_seq = self._parse_burst_seq(burst_seq)
         
-        # Validate data file exists
         if not os.path.exists(data_file_path):
             raise FileNotFoundError(f"Data file not found: {data_file_path}")
         
-        self.logger.info(f"CitiBikeEvaluator initialized with data file: {data_file_path}")
+        self.logger.info(f"Initialized with data file: {data_file_path}")
     
     def _parse_burst_seq(self, burst_seq_str: str):
-        """Parse burst sequence 'rate:duration,rate:duration' into a list of tuples."""
+        """Parse burst sequence string to list of (rate, duration) tuples."""
         if not burst_seq_str:
             return []
-        seq = []
         try:
             parts = [p.strip() for p in burst_seq_str.split(',') if p.strip()]
-            for part in parts:
-                r, d = part.split(':')
-                seq.append((float(r), float(d)))
+            return [(float(r), float(d)) for r, d in (p.split(':') for p in parts)]
         except Exception:
-            self.logger.warning("Invalid --burst-seq format. Expected 'rate:duration,rate:duration'. Ignoring.")
+            self.logger.warning("Invalid burst-seq format, ignoring")
             return []
-        return seq
     
     def create_hot_path_pattern(self, target_stations=None):
-        """Create hot path pattern as per project requirements
+        """Create hot path pattern: SEQ(BikeTrip+ a[], BikeTrip b) with chaining and same bike.
         
-        Required pattern: SEQ(BikeTrip+ a[], BikeTrip b)
-        WHERE a[i+1].bike = a[i].bike AND b.end in {target_stations}
-        AND a[last].bike = b.bike AND a[i+1].start = a[i].end
+        WHERE a[i+1].bike = a[i].bike AND a[i+1].start = a[i].end
+        AND a[last].bike = b.bike AND b.end in {target_stations}
         WITHIN 1h
-        
-        Args:
-            target_stations: List of target station IDs (default: ["7", "8", "9"] per project spec)
-        
-        This matches the exact specification in the project PDF.
-        Always uses Kleene closure as required.
         """
-        # Use instance target stations or provided parameter
         if target_stations is None:
             target_stations = self.target_stations
-        self.logger.info("Creating PROJECT REQUIRED hot path pattern: SEQ(BikeTrip+ a[], BikeTrip b)")
-        self.logger.info(f"Pattern constraints: chained trips, same bike, ending at stations {target_stations}")
-        print(f"Creating PROJECT REQUIRED pattern with Kleene closure, target stations: {target_stations}")
-        
-        # Define the full pattern with Kleene closure as required
         pattern = Pattern(
             SeqOperator(
                 # BikeTrip+ a[] - One or more chained trips by same bike
@@ -194,25 +161,21 @@ class CitiBikeEvaluator:
             ),
             # Full required conditions
             AndCondition(
-                # a[i+1].bike = a[i].bike - Same bike throughout chain
                 BinaryCondition(
                     Variable("a", lambda events: [e["bikeid"] for e in events] if isinstance(events, list) else events["bikeid"]),
                     Variable("a", lambda events: [e["bikeid"] for e in events] if isinstance(events, list) else events["bikeid"]),
                     relation_op=lambda bikes, _: all(bikes[i] == bikes[i+1] for i in range(len(bikes)-1)) if isinstance(bikes, list) and len(bikes) > 1 else True
                 ),
-                # a[i+1].start = a[i].end - Chained trips
                 BinaryCondition(
                     Variable("a", lambda events: [(e["start station id"], e["end station id"]) for e in events] if isinstance(events, list) else [(events["start station id"], events["end station id"])]),
                     Variable("a", lambda events: [(e["start station id"], e["end station id"]) for e in events] if isinstance(events, list) else [(events["start station id"], events["end station id"])]),
                     relation_op=lambda stations, _: all(stations[i][1] == stations[i+1][0] for i in range(len(stations)-1)) if isinstance(stations, list) and len(stations) > 1 else True
                 ),
-                # a[last].bike = b.bike - Chain connects to final trip
                 BinaryCondition(
                     Variable("a", lambda events: events[-1]["bikeid"] if isinstance(events, list) else events["bikeid"]),
                     Variable("b", lambda x: x["bikeid"]),
                     relation_op=lambda a_bike, b_bike: a_bike == b_bike if a_bike is not None and b_bike is not None else False
                 ),
-                # b.end in {target_stations} - Final trip ends at target stations
                 SimpleCondition(
                     Variable("b", lambda x: x["end station id"]),
                     relation_op=lambda end_station: str(end_station) in target_stations if end_station is not None else False
@@ -220,277 +183,92 @@ class CitiBikeEvaluator:
             ),
             timedelta(hours=1)
         )
-        
-        self.logger.debug("Full hot path pattern with Kleene closure created successfully")
         return pattern
     
     def _run_cep_with_event_logging(self, cep, events, output, formatter, max_events):
-        """Run CEP with detailed event-by-event logging to track progress"""
-        start_time = time.time()
-        
+        """Run CEP with timeout monitoring."""
         self.logger.info(f"Starting CEP processing for {max_events} events")
         
-        # Get the evaluation manager to add progress tracking
-        try:
-            # Create a custom event stream wrapper that logs each event
-            event_count = 0
-            logged_events = []
-            
-            # We need to intercept the events as they're processed
-            # For now, let's run the standard CEP and add timeout monitoring
-            import threading
-            import signal
-            
-            # Set up a timeout handler
-            def timeout_handler():
-                self.logger.warning(f"CEP processing has been running for >30 seconds with {event_count} events processed")
-                print(f"WARNING: Still processing... {event_count} events handled so far")
-                
-            # Start a timeout monitor thread
-            timeout_timer = threading.Timer(30.0, timeout_handler)
-            timeout_timer.start()
-            
-            try:
-                # Run the actual CEP processing
-                self.logger.info("Starting CEP.run()...")
-                processing_time = cep.run(events, output, formatter)
-                
-                # Cancel the timeout timer if we complete
-                timeout_timer.cancel()
-                
-                self.logger.info(f"CEP processing completed successfully in {processing_time:.4f}s")
-                print(f"CEP processing completed in {processing_time:.4f}s")
-                
-                return processing_time
-                
-            except Exception as e:
-                timeout_timer.cancel()
-                self.logger.error(f"CEP processing failed: {e}")
-                print(f"CEP processing failed: {e}")
-                raise
-                
-        except Exception as e:
-            self.logger.error(f"Error in event logging wrapper: {e}")
-            print(f"Error in event logging: {e}")
-            # Fallback to simple run
-            return cep.run(events, output, formatter)
+        import threading
         
-        self.logger.debug("Simplified hot path pattern created without Kleene closure")
-        return pattern
-    
-    def create_event_stream(self, max_events: int):
-        """Create event stream from data file using proper OpenCEP FileInputStream"""
-        self.logger.info(f"Creating FileInputStream from {self.data_file_path}")
+        def timeout_handler():
+            print(f"WARNING: Still processing after 30s...")
+            
+        timeout_timer = threading.Timer(30.0, timeout_handler)
+        timeout_timer.start()
         
         try:
-            # Create a temporary file with limited events for testing
-            import tempfile
-            temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv')
-            
-            with open(self.data_file_path, 'r') as f:
-                lines_written = 0
-                for line in f:
-                    temp_file.write(line)
-                    lines_written += 1
-                    if lines_written >= max_events:
-                        break
-            
-            temp_file.close()
-            self.logger.info(f"Created temporary file with {lines_written} lines: {temp_file.name}")
-            
-            # Use throttled stream if configured, else standard FileInputStream
-            if self.burst_seq or (self.ingest_rate and self.ingest_rate > 0):
-                self.logger.info("Using throttled input stream for burst/ingest-rate simulation")
-                file_input = ThrottledFileInputStream(temp_file.name, self.ingest_rate, self.burst_seq)
-                # Do not unlink immediately; throttled stream reads lazily
-            else:
-                file_input = FileInputStream(temp_file.name)
-                # Clean up temp file after FileInputStream reads it
-                import os
-                os.unlink(temp_file.name)
-            
-            return file_input
-            
+            processing_time = cep.run(events, output, formatter)
+            timeout_timer.cancel()
+            print(f"CEP processing completed in {processing_time:.4f}s")
+            return processing_time
         except Exception as e:
-            self.logger.error(f"Error creating event stream: {e}")
+            timeout_timer.cancel()
+            self.logger.error(f"CEP processing failed: {e}")
             raise
     
-    def _run_with_detailed_logging(self, cep, events, output, formatter, max_events):
-        """Run CEP with detailed event-by-event logging"""
-        start_time = time.time()
+    def create_event_stream(self, max_events: int):
+        """Create event stream from data file."""
+        import tempfile
         
-        self.logger.info(f"Starting actual CEP pattern detection with logging...")
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv')
         
-        # Actually run the CEP engine but add some progress logging
-        # by wrapping the evaluation manager
-        try:
-            # Get the evaluation manager and wrap it with logging
-            original_eval_manager = cep._CEP__evaluation_manager
-            
-            # Create a wrapper that adds logging
-            class LoggingWrapper:
-                def __init__(self, original_manager, logger):
-                    self.original_manager = original_manager
-                    self.logger = logger
-                    self.event_count = 0
-                
-                def eval(self, events, matches, data_formatter):
-                    self.logger.info("Starting CEP evaluation with logging...")
-                    
-                    # We'll need to process events manually to add logging
-                    for raw_event in events:
-                        self.event_count += 1
-                        
-                        # Create event and log it
-                        from base.Event import Event
-                        event = Event(raw_event, data_formatter)
-                        
-                        # Log progress
-                        if self.event_count % 5 == 0 or self.event_count <= 10:
-                            self.logger.info(f"Processing event {self.event_count}: type={event.type}")
-                            print(f"  -> Event {self.event_count}: {event.type}")
-                            
-                            if event.type == "BikeTrip" and hasattr(event, 'payload'):
-                                bikeid = event.payload.get('bikeid', 'N/A')
-                                start_station = event.payload.get('start station id', 'N/A')
-                                end_station = event.payload.get('end station id', 'N/A')
-                                self.logger.info(f"  -> BikeTrip: ID={bikeid}, {start_station} -> {end_station}")
-                                print(f"     BikeTrip: ID={bikeid}, {start_station} -> {end_station}")
-                    
-                    # Now run the original evaluation
-                    self.logger.info(f"Processed all {self.event_count} events, now running pattern detection...")
-                    print(f"Processed all {self.event_count} events, now running pattern detection...")
-                    
-                    # Reset the events stream and run the original evaluation
-                    events_copy = self._recreate_events(events)
-                    return self.original_manager.eval(events_copy, matches, data_formatter)
-                
-                def _recreate_events(self, original_events):
-                    # We need to recreate the events stream since we consumed it
-                    # This is a bit tricky, but we can create a new FileInputStream
-                    return original_events
-                    
-                def get_pattern_match_stream(self):
-                    return self.original_manager.get_pattern_match_stream()
-                    
-                def get_structure_summary(self):
-                    return self.original_manager.get_structure_summary()
-            
-            # Temporarily replace the evaluation manager
-            logged_manager = LoggingWrapper(original_eval_manager, self.logger)
-            cep._CEP__evaluation_manager = logged_manager
-            
-            # Run the CEP evaluation
-            processing_time = cep.run(events, output, formatter)
-            
-            # Restore original manager
-            cep._CEP__evaluation_manager = original_eval_manager
-            
-            return processing_time
-            
-        except Exception as e:
-            self.logger.error(f"Error in logged CEP evaluation: {e}")
-            print(f"ERROR in CEP evaluation: {e}")
-            # Fall back to simple run
-            return cep.run(events, output, formatter)
+        with open(self.data_file_path, 'r') as f:
+            for i, line in enumerate(f):
+                if i >= max_events:
+                    break
+                temp_file.write(line)
+        
+        temp_file.close()
+        
+        if self.burst_seq or (self.ingest_rate and self.ingest_rate > 0):
+            return ThrottledFileInputStream(temp_file.name, self.ingest_rate, self.burst_seq)
+        else:
+            file_input = FileInputStream(temp_file.name)
+            os.unlink(temp_file.name)
+            return file_input
+    
     
     def run_basic_test(self, max_events=100):
-        """Mode 1: Basic integration test"""
+        """Basic integration test."""
         print("=" * 60)
         print("BASIC INTEGRATION TEST")
         print("=" * 60)
-        print("Purpose: Verify OpenCEP + CitiBike integration works")
         print(f"Events: {max_events}")
         print("-" * 60)
         
-        self.logger.info("Starting basic integration test")
-        
         try:
-            # Create pattern and CEP engine
-            print("Creating complex hot path pattern...")
+            print("Creating hot path pattern...")
             pattern = self.create_hot_path_pattern()
-            print("Initializing Load Shedding CEP engine...")
-            self.logger.info("Initializing Load Shedding CEP engine with hot path pattern")
             
-            # Create load shedding config for Kleene closure
             load_shedding_config = LoadSheddingConfig(
                 enabled=True,
-                max_partial_matches=50,  # Very conservative for Kleene closure
+                max_partial_matches=50,
                 shedding_strategy="utility",
                 aggressive_shedding=True,
                 target_stations=set(self.target_stations)
             )
             
             cep = LoadSheddingCEP([pattern], load_shedding_config)
-            self.logger.info("Load Shedding CEP engine initialized successfully")
-            
-            # Create event stream
-            print("Creating event stream...")
             events = self.create_event_stream(max_events)
-            print("Setting up output stream and formatter...")
             output = OutputStream()
             formatter = CitiBikeDataFormatter()
-            self.logger.info("Event stream and output components ready")
             
-            # Run detection
-            self.logger.info(f"Running pattern detection on {max_events} events")
-            
-            print("=" * 50)
-            print("STARTING KLEENE CLOSURE PATTERN DETECTION")
-            print(f"WARNING: Kleene closure creates exponential complexity")
-            print(f"Processing {max_events} events...")
-            print("If this takes too long, use fewer events (--max-events 10)")
-            print("=" * 50)
-            
+            print(f"\nProcessing {max_events} events...")
             start_time = time.time()
-            
-            # Wrap the CEP run with detailed logging
             processing_time = self._run_cep_with_event_logging(cep, events, output, formatter, max_events)
-            
             wall_clock_time = time.time() - start_time
             
-            self.logger.info(f"Pattern detection completed in {wall_clock_time:.4f}s")
-            
-            print("\n" + "=" * 50)
-            print(f"PATTERN DETECTION COMPLETED")
-            print(f"Total time: {wall_clock_time:.2f}s")
-            print(f"Average: {wall_clock_time/max_events:.3f}s per event")
-            print("=" * 50)
-            
-            # Collect matches
-            print("\nCollecting matches...")
             matches = []
-            
-            # Check if there are matches in the output stream
-            match_count = output.count()
-            self.logger.info(f"Found {match_count} matches")
-            
-            if match_count > 0:
-                # Direct access to the internal queue for match collection
-                # This is a workaround since OutputStream doesn't allow get_item()
+            if output.count() > 0:
                 try:
-                    # Access the internal queue directly
                     internal_queue = output._stream.queue
-                    
-                    for i, item in enumerate(internal_queue):
-                        # Only log first 10 and every 1000th match to avoid overwhelming output
-                        if i < 10 or i % 1000 == 0:
-                            self.logger.debug(f"Queue item {i}: {type(item)}")
-                        
-                        if item is None:  # None indicates end of stream
+                    for item in internal_queue:
+                        if item is None:
                             break
-                            
                         matches.append(item)
-                        
-                        # Only show details for first few matches
-                        if len(matches) <= 3:
-                            self.logger.debug(f"Collected match {len(matches)}")
-                            
                 except Exception as e:
-                    self.logger.error(f"Error accessing internal queue: {e}")
-                    print(f"  -> Error collecting matches: {e}")
-            
-            print(f"Collected {len(matches)} total matches")
+                    print(f"Error collecting matches: {e}")
             
             # Create result
             result = TestResult(
@@ -502,26 +280,44 @@ class CitiBikeEvaluator:
                 throughput=max_events / wall_clock_time if wall_clock_time > 0 else 0
             )
             
-            # Display results
-            print(f"Integration test PASSED")
-            print(f"   Events processed: {max_events}")
-            print(f"   Matches found: {len(matches)}")
-            print(f"   Processing time: {processing_time:.4f}s")
-            print(f"   Throughput: {result.throughput:.1f} events/s")
+            print(f"\nTest PASSED")
+            print(f"Events: {max_events}, Matches: {len(matches)}, Time: {processing_time:.4f}s")
+            print(f"Throughput: {result.throughput:.1f} events/s")
             
             if matches:
-                print(f"\nSample matches:")
+                print(f"\nSample matches (showing first 3):")
                 for i, match in enumerate(matches[:3]):
                     events_in_match = match.events
-                    bike_id = events_in_match[0].payload.get('bikeid', 'Unknown')
-                    # Construct return fields as per PDF: (a[1].start, a[i].end, b.end)
-                    if len(events_in_match) >= 2 and hasattr(events_in_match[0], 'payload') and hasattr(events_in_match[-1], 'payload'):
-                        a1_start = events_in_match[0].payload.get('start station id', 'Unknown')
-                        ai_end = events_in_match[-2].payload.get('end station id', 'Unknown')
-                        b_end = events_in_match[-1].payload.get('end station id', 'Unknown')
-                        print(f"  Match {i+1}: Bike {bike_id} used in {len(events_in_match)} consecutive trips | RETURN: ({a1_start}, {ai_end}, {b_end})")
-                    else:
-                        print(f"  Match {i+1}: Bike {bike_id} used in {len(events_in_match)} consecutive trips")
+                    if len(events_in_match) >= 2:
+                        # Get bike ID from any event that has it
+                        bike_id = None
+                        for event in events_in_match:
+                            if event.payload.get('bikeid'):
+                                bike_id = event.payload.get('bikeid')
+                                break
+                        
+                        # For pattern SEQ(BikeTrip+ a[], BikeTrip b):
+                        # a[] = events_in_match[:-1], b = events_in_match[-1]
+                        a_events = events_in_match[:-1]  # All but last
+                        b_event = events_in_match[-1]     # Last event
+                        
+                        # Return tuple format: (a[1].start, a[last].end, b.end)
+                        if a_events:
+                            # Debug: check what's actually in payload
+                            if i == 0:  # Only for first match
+                                print(f"    DEBUG: a_events[0].payload keys: {list(a_events[0].payload.keys())[:10]}")
+                                print(f"    DEBUG: a_events[0].payload sample: {dict(list(a_events[0].payload.items())[:3])}")
+                            a1_start = a_events[0].payload.get('start station id')
+                            ai_end = a_events[-1].payload.get('end station id')
+                        else:
+                            a1_start = ai_end = None
+                        b_end = b_event.payload.get('end station id')
+                        
+                        # Format output
+                        def fmt(val):
+                            return str(val) if val is not None else 'N/A'
+                        
+                        print(f"  Match {i+1}: Bike {fmt(bike_id)}, {len(events_in_match)} trips: ({fmt(a1_start)}, {fmt(ai_end)}, {fmt(b_end)})")
             
             self.results.append(result)
             return result
@@ -725,7 +521,12 @@ class CitiBikeEvaluator:
         print("=" * 60)
         print("Purpose: Evaluate load shedding impact on latency vs recall")
         print(f"Test events: {test_events}")
+        print(f"Target stations: {self.target_stations}")
         print(f"Latency bounds: {latency_bounds}% of baseline (PROJECT REQUIREMENT)")
+        print("-" * 60)
+        print(f"NOTE: Pattern requires chained bike trips ending at target stations.")
+        print(f"      For meaningful results, ensure: (1) Enough events (100+)")
+        print(f"      (2) Valid target stations (use scripts/find_targets.py)")
         print("-" * 60)
         
         self.logger.info("Starting load shedding evaluation as per project requirements")
@@ -746,6 +547,13 @@ class CitiBikeEvaluator:
             )
             print(f"  Baseline: {len(base_matches)} matches, {baseline_result.throughput:.1f} events/s")
             print(f"  Processing time: {base_proc:.4f}s")
+            
+            if len(base_matches) == 0:
+                print(f"  WARNING: No matches found in baseline!")
+                print(f"  This pattern requires chained trips on same bike ending at stations {self.target_stations}")
+                print(f"  Try: (1) More events (--max-events 100+), (2) Find actual targets (scripts/find_targets.py)")
+                print(f"  Recall metrics will be meaningless with 0 baseline matches.")
+            
             self.results.append(baseline_result)
         except Exception as e:
             print(f"  ERROR in baseline: {e}")
@@ -764,7 +572,14 @@ class CitiBikeEvaluator:
                     print("  Could not achieve target latency; reporting closest run.")
                     continue
                 max_pm, proc, wall, kept, dropped = best
-                recall_rate = (len(kept) / max(baseline_result.matches_found, 1))
+                
+                # Calculate recall properly - handle zero baseline case
+                if baseline_result.matches_found > 0:
+                    recall_rate = len(kept) / baseline_result.matches_found
+                else:
+                    # No baseline matches - recall is undefined, but if we found any it's a bonus
+                    recall_rate = 1.0 if len(kept) == 0 else float('inf')
+                
                 result = TestResult(
                     mode=f"load_shedding_{bound}%",
                     events_processed=test_events,
@@ -772,13 +587,17 @@ class CitiBikeEvaluator:
                     wall_clock_time=wall,
                     matches_found=len(kept),
                     throughput=test_events / wall if wall > 0 else 0,
-                    recall_rate=recall_rate,
+                    recall_rate=recall_rate if baseline_result.matches_found > 0 else 0.0,
                     load_shedding_triggered=True,
                     baseline_matches=baseline_result.matches_found,
                     dropped_matches=max(0, baseline_result.matches_found - len(kept))
                 )
                 print(f"  max_partial_matches={max_pm}")
-                print(f"  Recall: {recall_rate:.3f} ({recall_rate*100:.1f}%)")
+                print(f"  Matches: {len(kept)} (baseline: {baseline_result.matches_found})")
+                if baseline_result.matches_found > 0:
+                    print(f"  Recall: {recall_rate:.3f} ({recall_rate*100:.1f}%)")
+                else:
+                    print(f"  Recall: N/A (no baseline matches)")
                 print(f"  Measured latency: {wall:.4f}s ({(wall / baseline_result.wall_clock_time)*100:.1f}% of baseline)")
                 load_shedding_results.append(result)
                 self.results.append(result)
@@ -789,12 +608,15 @@ class CitiBikeEvaluator:
         # Summary
         if load_shedding_results:
             print(f"\nLoad Shedding Summary:")
-            print("Latency Bound\tRecall Rate\tMatches Kept\tmax_partial_matches")
+            print(f"Baseline matches: {baseline_result.matches_found}")
+            print("Latency Bound\tRecall Rate\tMatches Kept\tBaseline")
             print("-" * 60)
             for r in load_shedding_results:
                 bound = r.mode.split('_')[2]
-                # We didn't store max_partial_matches in TestResult; show matches instead
-                print(f"{bound}\t\t{r.recall_rate:.2f}\t\t{r.matches_found}\t\tN/A")
+                if baseline_result.matches_found > 0:
+                    print(f"{bound}\t\t{r.recall_rate:.2f}\t\t{r.matches_found}\t\t{r.baseline_matches}")
+                else:
+                    print(f"{bound}\t\tN/A\t\t{r.matches_found}\t\t{r.baseline_matches}")
         
         return load_shedding_results
     

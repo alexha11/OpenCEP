@@ -25,10 +25,8 @@ class LoggingEvaluationWrapper:
             self.event_count += 1
             
             try:
-                # Parse event
                 event = Event(raw_event, data_formatter)
-                
-                # Log event processing
+
                 if self.event_count % 5 == 0 or self.event_count <= 10:
                     self.logger.info(f"Processing event {self.event_count}: type={event.type}, "
                                    f"timestamp={event.timestamp}")
@@ -36,14 +34,11 @@ class LoggingEvaluationWrapper:
                         self.logger.info(f"  -> BikeID: {event.payload.get('bikeid')}, "
                                        f"Start station: {event.payload.get('start station id')}, "
                                        f"End station: {event.payload.get('end station id')}")
-                
-                # Skip header events
+
                 if event.type == "Header":
                     self.logger.info(f"  -> Skipping header event")
                     continue
-                
-                # Process the event through the original mechanism
-                # We'll need to access internal methods for this
+
                 if hasattr(self.evaluation_mechanism, '_event_types_listeners'):
                     if event.type not in self.evaluation_mechanism._event_types_listeners:
                         self.logger.debug(f"  -> Event type {event.type} not in listeners, skipping")

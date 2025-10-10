@@ -5,9 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Defaults
 DEFAULT_DATA_FILE="$SCRIPT_DIR/data/2014-citibike-tripdata/1_January/201401-citibike-tripdata_1.csv"
-DEFAULT_TARGET_STATIONS=(79 83 100)
+DEFAULT_TARGET_STATIONS=(526 270 519)
 DEFAULT_MODE="load-shedding"
-DEFAULT_MAX_EVENTS=25
+DEFAULT_MAX_EVENTS=20
 
 # If no args, announce and proceed with defaults
 if [ $# -eq 0 ]; then
