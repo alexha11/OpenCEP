@@ -20,27 +20,31 @@ MAX_EVENTS=$DEFAULT_MAX_EVENTS
 DATA_FILE=$DEFAULT_DATA_FILE
 
 ARGS=("$@")
-i=0
-while [ $i -lt ${#ARGS[@]} ]; do
-  if [[ "${ARGS[$i]}" == "--max-events" && $((i+1)) -lt ${#ARGS[@]} ]]; then
-    MAX_EVENTS=${ARGS[$((i+1))]}
-  elif [[ "${ARGS[$i]}" == "--data-file" || "${ARGS[$i]}" == "-d" ]] && [[ $((i+1)) -lt ${#ARGS[@]} ]]; then
-    DATA_FILE=${ARGS[$((i+1))]}
-  fi
-  ((i++))
-done
+if [ $# -gt 0 ]; then
+  i=0
+  while [ $i -lt ${#ARGS[@]} ]; do
+    if [[ "${ARGS[$i]}" == "--max-events" && $((i+1)) -lt ${#ARGS[@]} ]]; then
+      MAX_EVENTS=${ARGS[$((i+1))]}
+    elif [[ "${ARGS[$i]}" == "--data-file" || "${ARGS[$i]}" == "-d" ]] && [[ $((i+1)) -lt ${#ARGS[@]} ]]; then
+      DATA_FILE=${ARGS[$((i+1))]}
+    fi
+    ((i++))
+  done
+fi
 
 # Check if we need to add defaults
 HAS_DATA=false
 HAS_TARGETS=false
 HAS_MODE=false
 HAS_MAX_EVENTS=false
-for arg in "${ARGS[@]}"; do
-  if [[ "$arg" == "--data-file" || "$arg" == "-d" ]]; then HAS_DATA=true; fi
-  if [[ "$arg" == "--target-stations" ]]; then HAS_TARGETS=true; fi
-  if [[ "$arg" == "--mode" ]]; then HAS_MODE=true; fi
-  if [[ "$arg" == "--max-events" ]]; then HAS_MAX_EVENTS=true; fi
-done
+if [ $# -gt 0 ]; then
+  for arg in "${ARGS[@]}"; do
+    if [[ "$arg" == "--data-file" || "$arg" == "-d" ]]; then HAS_DATA=true; fi
+    if [[ "$arg" == "--target-stations" ]]; then HAS_TARGETS=true; fi
+    if [[ "$arg" == "--mode" ]]; then HAS_MODE=true; fi
+    if [[ "$arg" == "--max-events" ]]; then HAS_MAX_EVENTS=true; fi
+  done
+fi
 
 if ! $HAS_MODE; then
   ARGS+=("--mode" "$DEFAULT_MODE")

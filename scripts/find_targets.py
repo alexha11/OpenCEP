@@ -2,11 +2,15 @@
 import sys
 import csv
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
+from datetime import datetime
 
 START_KEYS = ['start station id', 'start_station_id', 'start_station_id ']
 END_KEYS = ['end station id', 'end_station_id', 'end_station_id ']
+BIKE_KEYS = ['bikeid', 'bike_id']
+START_TIME_KEYS = ['starttime', 'started_at']
+STOP_TIME_KEYS = ['stoptime', 'ended_at']
 
 SELECTIVITY_MODES = ['balanced', 'rare', 'common']
 
@@ -17,19 +21,36 @@ def detect_col(headers, candidates):
         if c in hmap:
             return c, hmap[c]
     for name, idx in hmap.items():
-        if 'station' in name and 'id' in name and ('start' in name or 'end' in name):
+        if any(k in name for k in candidates):
             return name, idx
     return None, None
+
+
+def parse_dt(v: str):
+    if not v:
+        return None
+    v = v.strip().replace('"', '')
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            return datetime.strptime(v, fmt)
+        except ValueError:
+            continue
+    try:
+        # Fallback: fromisoformat sans Z
+        return datetime.fromisoformat(v.rstrip('Z'))
+    except Exception:
+        return None
 
 
 def main():
     ap = argparse.ArgumentParser(
         description='Find target station IDs for CitiBike CSV',
-        epilog='Example: python3 find_targets.py data.csv --max-events 20 --mode rare --top 3'
+        epilog='Example: python3 find_targets.py data.csv --max-events 20 --mode common --top 3'
     )
     ap.add_argument('file', help='Path to CitiBike CSV')
     ap.add_argument('--top', type=int, default=3, help='Number of targets (default: 3)')
-    ap.add_argument('--max-events', type=int, default=0, 
+    ap.add_argument('--max-events', type=int, default=0,
                     help='Only analyze first N events (0=all, default: 0)')
     ap.add_argument('--mode', choices=SELECTIVITY_MODES, default='balanced',
                     help='Selection mode: balanced (default), rare (selective), common (high volume)')
@@ -48,14 +69,19 @@ def main():
         except StopIteration:
             print('Error: empty CSV', file=sys.stderr)
             sys.exit(1)
-        
+
         if args.verbose:
             if args.max_events > 0:
                 print(f'Analyzing first {args.max_events} events only', file=sys.stderr)
             else:
                 print(f'Analyzing entire file', file=sys.stderr)
+
         start_key, start_idx = detect_col(headers, START_KEYS)
         end_key, end_idx = detect_col(headers, END_KEYS)
+        bike_key, bike_idx = detect_col(headers, BIKE_KEYS)
+        st_key, st_idx = detect_col(headers, START_TIME_KEYS)
+        et_key, et_idx = detect_col(headers, STOP_TIME_KEYS)
+
         if start_idx is None or end_idx is None:
             print('Error: could not detect start/end station id columns', file=sys.stderr)
             if args.verbose:
@@ -64,140 +90,126 @@ def main():
 
         start_counts = Counter()
         end_counts = Counter()
-        events_read = 0
+        # Chainable terminal counts (based on adjacent, same-bike, station continuity, within 1h)
+        chain_terminal_counts = Counter()
+        last_trip_by_bike = {}
 
+        events_read = 0
         for row in rdr:
             if len(row) != len(headers):
                 continue
-            
-            # Respect max_events limit
             if args.max_events > 0 and events_read >= args.max_events:
                 break
             events_read += 1
-            
-            sv = row[start_idx].strip()
-            ev = row[end_idx].strip()
+
+            try:
+                sv = row[start_idx].strip()
+                ev = row[end_idx].strip()
+            except Exception:
+                continue
+
             if sv:
                 start_counts[sv] += 1
             if ev:
                 end_counts[ev] += 1
-        
+
+            # Chain detection requires bike/time data
+            if bike_idx is not None and st_idx is not None and et_idx is not None:
+                try:
+                    bike = row[bike_idx].strip()
+                except Exception:
+                    bike = None
+                st = parse_dt(row[st_idx]) if st_idx is not None else None
+                et = parse_dt(row[et_idx]) if et_idx is not None else None
+
+                # Form current trip record
+                trip = {
+                    'bike': bike,
+                    'start': sv,
+                    'end': ev,
+                    'starttime': st,
+                    'stoptime': et,
+                }
+                if bike:
+                    prev = last_trip_by_bike.get(bike)
+                    if prev and prev.get('end') and trip['start'] and prev['end'] == trip['start']:
+                        # Within 1 hour if times present
+                        within = True
+                        if prev.get('stoptime') and trip.get('starttime'):
+                            delta = (trip['starttime'] - prev['stoptime']).total_seconds()
+                            within = (delta >= 0 and delta <= 3600)
+                        if within and trip['end']:
+                            chain_terminal_counts[trip['end']] += 1
+                    last_trip_by_bike[bike] = trip
+
         if args.verbose:
             print(f'Read {events_read} events', file=sys.stderr)
+            print(f'Found {len(chain_terminal_counts)} chainable terminals', file=sys.stderr)
 
-        # Build overlap list (stations appearing as both start and end)
-        overlap = []
-        for sid, ec in end_counts.items():
-            if sid in start_counts:
-                combined = ec + start_counts[sid]
-                overlap.append((sid, combined, ec, start_counts[sid]))
-        
-        if not overlap:
-            # No chainable stations, fall back to most common end stations
-            chosen = [sid for sid, _ in end_counts.most_common(args.top)]
-        else:
+        chosen = []
+        # Prefer chain-based terminals when available
+        if chain_terminal_counts:
+            items = list(chain_terminal_counts.items())
             # Apply selection strategy
             if args.mode == 'rare':
-                # Rare: Prefer stations with LOW frequency (more selective patterns)
-                # These will generate fewer matches, better for testing with Kleene closure
-                overlap.sort(key=lambda x: x[1])  # Sort ascending (rarest first)
-                chosen = [sid for sid, _, _, _ in overlap[:args.top]]
+                items.sort(key=lambda x: x[1])
             elif args.mode == 'common':
-                # Common: Prefer stations with HIGH frequency (more matches)
-                overlap.sort(key=lambda x: x[1], reverse=True)  # Sort descending
-                chosen = [sid for sid, _, _, _ in overlap[:args.top]]
-            else:  # balanced (default)
-                # Balanced: Prefer medium frequency (appears in both but not too common)
-                # Filter out extremes (< 2 or > 10% of events)
-                max_count = events_read * 0.1 if events_read > 0 else float('inf')
-                filtered = [x for x in overlap if 2 <= x[1] <= max_count]
-                if not filtered:
-                    filtered = overlap  # Fall back if filter too strict
-                filtered.sort(key=lambda x: x[1])  # Sort by frequency
-                # Pick from middle range
-                mid_start = len(filtered) // 3
-                mid_end = 2 * len(filtered) // 3
-                candidates = filtered[mid_start:mid_end] if len(filtered) > args.top else filtered
-                chosen = [sid for sid, _, _, _ in candidates[:args.top]]
-        
-        # Guarantee we have at least args.top stations
+                items.sort(key=lambda x: x[1], reverse=True)
+            else:  # balanced
+                items.sort(key=lambda x: x[1])
+                mid_start = len(items) // 3
+                mid_end = 2 * len(items) // 3
+                items = items[mid_start:mid_end] if len(items) > args.top else items
+            chosen = [sid for sid, _ in items[:args.top]]
+
+        # Fallback to overlap if chain-based insufficient
         if len(chosen) < args.top:
-            # Add more stations from end_counts that we haven't chosen yet
+            overlap = []
+            for sid, ec in end_counts.items():
+                if sid in start_counts:
+                    combined = ec + start_counts[sid]
+                    overlap.append((sid, combined, ec, start_counts[sid]))
+            if overlap:
+                if args.mode == 'rare':
+                    overlap.sort(key=lambda x: x[1])
+                    chosen.extend([sid for sid, _, _, _ in overlap[:max(0, args.top - len(chosen))]])
+                elif args.mode == 'common':
+                    overlap.sort(key=lambda x: x[1], reverse=True)
+                    chosen.extend([sid for sid, _, _, _ in overlap[:max(0, args.top - len(chosen))]])
+                else:
+                    max_count = events_read * 0.1 if events_read > 0 else float('inf')
+                    filtered = [x for x in overlap if 2 <= x[1] <= max_count]
+                    if not filtered:
+                        filtered = overlap
+                    filtered.sort(key=lambda x: x[1])
+                    mid_start = len(filtered) // 3
+                    mid_end = 2 * len(filtered) // 3
+                    candidates = filtered[mid_start:mid_end] if len(filtered) > args.top else filtered
+                    chosen.extend([sid for sid, _, _, _ in candidates[:max(0, args.top - len(chosen))]])
+
+        # Final fallback to end_counts if still insufficient
+        chosen = list(dict.fromkeys(chosen))  # dedupe preserve order
+        if len(chosen) < args.top:
             additional_needed = args.top - len(chosen)
             chosen_set = set(chosen)
-            additional = []
-            for sid, count in end_counts.most_common():
-                if sid not in chosen_set and len(additional) < additional_needed:
-                    additional.append(sid)
-            chosen.extend(additional)
-        
-        # Final safety check: ensure we have at least args.top stations
-        if len(chosen) < args.top:
-            # Emergency fallback: use any available station IDs
-            all_stations = set(start_counts.keys()) | set(end_counts.keys())
-            chosen_set = set(chosen)
-            for sid in all_stations:
-                if sid not in chosen_set and len(chosen) < args.top:
+            for sid, _ in end_counts.most_common():
+                if sid not in chosen_set:
                     chosen.append(sid)
-        
-        # Truncate to exactly args.top if we somehow got more
-        chosen = chosen[:args.top]
-        
-        # Final validation: ensure all chosen stations appear in our analyzed events
-        all_stations = set(start_counts.keys()) | set(end_counts.keys())
-        validated_chosen = [sid for sid in chosen if sid in all_stations]
-        
-        if len(validated_chosen) < args.top:
-            # If validation removed some, add back from available stations
-            missing = args.top - len(validated_chosen)
-            chosen_set = set(validated_chosen)
-            for sid in all_stations:
-                if sid not in chosen_set and missing > 0:
-                    validated_chosen.append(sid)
-                    missing -= 1
-        
-        # Use validated list, truncated to requested number
-        final_chosen = validated_chosen[:args.top]
-        
+                    if len(chosen) >= args.top:
+                        break
+
         # Ensure we output something even if we couldn't find enough stations
-        if not final_chosen:
-            final_chosen = ['1']  # Emergency fallback
-        
-        print(' '.join(final_chosen))
+        if not chosen:
+            chosen = ['1']
+        chosen = chosen[:args.top]
+
+        print(' '.join(chosen))
 
         if args.verbose:
-            print('\nDetected columns:', file=sys.stderr)
-            print(f'  start: {start_key}', file=sys.stderr)
-            print(f'  end:   {end_key}', file=sys.stderr)
-            print(f'\nSelection mode: {args.mode}', file=sys.stderr)
-            print(f'Total stations with overlap: {len(overlap)}', file=sys.stderr)
-            
-            if overlap:
-                print('\nChosen stations (sid, combined_count, end_count, start_count):', file=sys.stderr)
-                for sid in final_chosen:
-                    matches = [x for x in overlap if x[0] == sid]
-                    if matches:
-                        sid_val, comb, ec, sc = matches[0]
-                        selectivity = f'{(comb/events_read)*100:.1f}%' if events_read > 0 else 'N/A'
-                        print(f'  {sid_val}: {comb} total ({selectivity} of events), {ec} ends, {sc} starts', file=sys.stderr)
-                    else:
-                        # Station from end_counts only
-                        end_count = end_counts.get(sid, 0)
-                        start_count = start_counts.get(sid, 0)
-                        total = end_count + start_count
-                        selectivity = f'{(total/events_read)*100:.1f}%' if events_read > 0 else 'N/A'
-                        print(f'  {sid}: {total} total ({selectivity} of events), {end_count} ends, {start_count} starts', file=sys.stderr)
-                
-                if args.mode == 'rare':
-                    print('\n[RARE mode: These stations appear infrequently = more selective patterns]', file=sys.stderr)
-                elif args.mode == 'common':
-                    print('\n[COMMON mode: These stations appear frequently = more matches]', file=sys.stderr)
-                else:
-                    print('\n[BALANCED mode: Medium frequency stations]', file=sys.stderr)
-            else:
-                print('\nNo chainable stations found. Using top end stations:', file=sys.stderr)
-                for sid, c in end_counts.most_common(10):
-                    print(f'  {sid}: {c}', file=sys.stderr)
+            print('\nSelection mode:', args.mode, file=sys.stderr)
+            print('Chainable terminals (top 10):', file=sys.stderr)
+            for sid, c in chain_terminal_counts.most_common(10):
+                print(f'  {sid}: {c}', file=sys.stderr)
 
 
 if __name__ == '__main__':
