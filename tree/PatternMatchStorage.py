@@ -93,6 +93,40 @@ class PatternMatchStorage:
         Returns the internal buffer actually storing the pattern matches.
         """
         return self._partial_matches
+    
+    def shed_load(self, target_size: int, current_time: datetime, target_stations=[7, 8, 9]):
+        """
+        Load shedding: Drop lowest-utility partial matches to reduce storage to target_size.
+        
+        Args:
+            target_size: Desired number of partial matches to keep
+            current_time: Current timestamp for utility calculation
+            target_stations: Target stations for Citi Bike pattern
+        
+        Returns:
+            Number of partial matches dropped
+        """
+        if len(self._partial_matches) <= target_size:
+            return 0  # No shedding needed
+        
+        # Calculate utility for each partial match
+        matches_with_utility = []
+        for pm in self._partial_matches:
+            try:
+                utility = pm.calculate_utility(current_time, target_stations)
+                matches_with_utility.append((pm, utility))
+            except Exception as e:
+                # If utility calculation fails, assign low utility
+                matches_with_utility.append((pm, -1000.0))
+        
+        # Sort by utility (highest first)
+        matches_with_utility.sort(key=lambda x: x[1], reverse=True)
+        
+        # Keep only the top target_size matches
+        dropped_count = len(matches_with_utility) - target_size
+        self._partial_matches = [pm for pm, _ in matches_with_utility[:target_size]]
+        
+        return dropped_count
 
     def add(self, pm: PatternMatch):
         """
