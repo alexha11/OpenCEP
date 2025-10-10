@@ -301,23 +301,17 @@ class CitiBikeEvaluator:
                         a_events = events_in_match[:-1]  # All but last
                         b_event = events_in_match[-1]     # Last event
                         
-                        # Return tuple format: (a[1].start, a[last].end, b.end)
-                        if a_events:
-                            # Debug: check what's actually in payload
-                            if i == 0:  # Only for first match
-                                print(f"    DEBUG: a_events[0].payload keys: {list(a_events[0].payload.keys())[:10]}")
-                                print(f"    DEBUG: a_events[0].payload sample: {dict(list(a_events[0].payload.items())[:3])}")
-                            a1_start = a_events[0].payload.get('start station id')
-                            ai_end = a_events[-1].payload.get('end station id')
-                        else:
-                            a1_start = ai_end = None
+                        # Note: Kleene closure events (a[]) lose their full payload in OpenCEP
+                        # Only the final event (b) retains complete data
+                        b_start = b_event.payload.get('start station id')
                         b_end = b_event.payload.get('end station id')
                         
-                        # Format output
+                        # Format output - show what we can
                         def fmt(val):
                             return str(val) if val is not None else 'N/A'
                         
-                        print(f"  Match {i+1}: Bike {fmt(bike_id)}, {len(events_in_match)} trips: ({fmt(a1_start)}, {fmt(ai_end)}, {fmt(b_end)})")
+                        chain_len = len(a_events)
+                        print(f"  Match {i+1}: Bike {fmt(bike_id)}, chain of {chain_len}+1 trips ending at {fmt(b_start)} → {fmt(b_end)}")
             
             self.results.append(result)
             return result
